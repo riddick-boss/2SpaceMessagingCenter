@@ -10,7 +10,7 @@ Used:
 ## Usage
  To use this code:
  - generate json with credentials in firebase console and place in it root named as "creds.json"
- - create file "topics.go" with following content"
+ - create file "topics.go" with following content
  ```go
  package main
 
