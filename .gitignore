@@ -13,3 +13,8 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+# Profject specific
+.vscode
+creds.json
+topics.go
