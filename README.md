@@ -14,10 +14,19 @@ Used:
  ```go
  package main
 
-func getTopicValue() string {
-	return "YOUR_TOPIC"
+func getReleaseTopicValue() string {
+	return "YOUR_RELEASE_TOPIC"
+}
+
+func getDebugTopicValue() string {
+	return "YOUR_DEBUG_TOPIC"
 }
  
+ ```
+ 
+ - pass release/debug flag as command line param
+ ```
+ go run *.go DEBUG
  ```
  
  and you are ready to go :)
