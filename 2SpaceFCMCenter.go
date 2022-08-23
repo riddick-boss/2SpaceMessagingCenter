@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"time"
 
 	firebase "firebase.google.com/go"
@@ -24,21 +25,37 @@ const TEN_MINUTES_IN_SECONDS = 600
 const NOTIFICATION_ID_KEY = "all_launches_notification_id"
 const NOTIFICATION_TITLE = "Upcoming launch"
 
-func setupFcmClient() (context.Context, *messaging.Client) {
+const RELEASE_FLAG = "RELEASE"
+const DEBUG_FLAG = "DEBUG"
+
+func setupFcmClient() (context.Context, *messaging.Client, error) {
 	ctx := context.Background()
 	opts := []option.ClientOption{option.WithCredentialsFile("creds.json")}
 
-	app, _ := firebase.NewApp(ctx, nil, opts...)
+	app, err1 := firebase.NewApp(ctx, nil, opts...)
+	if err1 != nil {
+		return nil, nil, err1
+	}
 
-	fcmClient, _ := app.Messaging(ctx)
+	fcmClient, err2 := app.Messaging(ctx)
+	if err2 != nil {
+		return nil, nil, err2
+	}
 
-	return ctx, fcmClient
+	return ctx, fcmClient, nil
 }
 
 // returns: shouldSendNotification, launch id, launch name
 func getInfoAboutUpcomingLaunch() (bool, string, string) {
-	response, _ := http.Get(UPCOMING_LAUNCH_URL)
-	body, _ := ioutil.ReadAll(response.Body)
+	response, err1 := http.Get(UPCOMING_LAUNCH_URL)
+	if err1 != nil {
+		return false, "", ""
+	}
+
+	body, err2 := ioutil.ReadAll(response.Body)
+	if err2 != nil {
+		return false, "", ""
+	}
 
 	var result map[string]interface{}
 
@@ -71,7 +88,10 @@ func getInfoAboutUpcomingLaunch() (bool, string, string) {
 }
 
 func convertTimeStampToSeconds(timestamp string) int64 {
-	time, _ := time.Parse(time.RFC3339, timestamp)
+	time, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		return 0
+	}
 	timeInSeconds := time.Unix()
 	return timeInSeconds
 }
@@ -104,16 +124,19 @@ func createNotification(id string, launchName string, topic string) *messaging.M
 
 func sendNotification(ctx context.Context, client *messaging.Client, notification *messaging.Message) {
 
-	response, _ := client.Send(ctx, notification)
+	response, err := client.Send(ctx, notification)
+	if err != nil {
+		fmt.Println("Failed to send message")
+		return
+	}
 	fmt.Println("Successfully sent notification:", response)
 }
 
-func runInfinite(ctx context.Context, client *messaging.Client) {
+func runInfinite(ctx context.Context, client *messaging.Client, topic string) {
 
 	for {
 		shouldSendNotification, launchId, launchName := getInfoAboutUpcomingLaunch()
 		if shouldSendNotification && launchId != "" && launchName != "" {
-			topic := getTopicValue()
 			notification := createNotification(launchId, launchName, topic)
 			sendNotification(ctx, client, notification)
 		}
@@ -122,8 +145,30 @@ func runInfinite(ctx context.Context, client *messaging.Client) {
 	}
 }
 
+func prepareTopic() string {
+	topic := ""
+
+	switch {
+	case len(os.Args) == 1 || os.Args[1] == DEBUG_FLAG: // if no params passed we want to use debug topic for safety
+		topic = getDebugTopicValue()
+	case os.Args[1] == RELEASE_FLAG:
+		topic = getReleaseTopicValue()
+	default:
+		topic = getDebugTopicValue()
+	}
+
+	return topic
+}
+
 func main() {
 	fmt.Println("Launching 2SpaceFcmMessagingCenter...")
-	ctx, fcmClient := setupFcmClient()
-	runInfinite(ctx, fcmClient)
+	ctx, fcmClient, err := setupFcmClient()
+	if err != nil {
+		fmt.Println("Failed to initialize FcmClient")
+		return
+	}
+
+	topic := prepareTopic()
+
+	runInfinite(ctx, fcmClient, topic)
 }
