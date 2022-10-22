@@ -28,6 +28,9 @@ const NOTIFICATION_TITLE = "Upcoming launch"
 const RELEASE_FLAG = "RELEASE"
 const DEBUG_FLAG = "DEBUG"
 
+// global varibles
+var lastNotificationLaunchId = ""
+
 func setupFcmClient() (context.Context, *messaging.Client, error) {
 	ctx := context.Background()
 	opts := []option.ClientOption{option.WithCredentialsFile("creds.json")}
@@ -45,21 +48,24 @@ func setupFcmClient() (context.Context, *messaging.Client, error) {
 	return ctx, fcmClient, nil
 }
 
-// returns: shouldSendNotification, launch id, launch name
-func getInfoAboutUpcomingLaunch() (bool, string, string) {
+// returns: shouldSendNotification, launch id, launch name, window start
+func getInfoAboutUpcomingLaunch() (bool, string, string, string) {
 	response, err1 := http.Get(UPCOMING_LAUNCH_URL)
-	if err1 != nil {
-		return false, "", ""
+	if err1 != nil || response == nil {
+		return false, "", "", ""
 	}
 
 	body, err2 := ioutil.ReadAll(response.Body)
-	if err2 != nil {
-		return false, "", ""
+	if err2 != nil || body == nil {
+		return false, "", "", ""
 	}
 
 	var result map[string]interface{}
 
-	json.Unmarshal([]byte(body), &result)
+	err3 := json.Unmarshal([]byte(body), &result)
+	if err3 != nil {
+		return false, "", "", ""
+	}
 
 	launch := result["results"].([]interface{})[0].(map[string]interface{})
 
@@ -68,7 +74,7 @@ func getInfoAboutUpcomingLaunch() (bool, string, string) {
 	isLaunchReady := abbrev == "Go"
 
 	if !isLaunchReady {
-		return false, "", ""
+		return false, "", "", ""
 	}
 
 	id := launch["id"].(string)
@@ -76,7 +82,8 @@ func getInfoAboutUpcomingLaunch() (bool, string, string) {
 
 	nowInSeconds := time.Now().Unix()
 
-	windowStartTimeInSeconds := convertTimeStampToSeconds(launch["window_start"].(string))
+	windowStart := launch["window_start"].(string)
+	windowStartTimeInSeconds := convertTimeStampToSeconds(windowStart)
 	isWindowStartInRange := isTimeInRange(windowStartTimeInSeconds, nowInSeconds)
 
 	windowEndTimeInSeconds := convertTimeStampToSeconds(launch["window_end"].(string))
@@ -84,7 +91,7 @@ func getInfoAboutUpcomingLaunch() (bool, string, string) {
 
 	shouldSendNotification := isLaunchReady && (isWindowStartInRange || isWindowEndInRange)
 
-	return shouldSendNotification, id, name
+	return shouldSendNotification, id, name, windowStart
 }
 
 func convertTimeStampToSeconds(timestamp string) int64 {
@@ -98,15 +105,15 @@ func convertTimeStampToSeconds(timestamp string) int64 {
 
 func isTimeInRange(timeInSeconds int64, nowInSeconds int64) bool {
 	diff := timeInSeconds - nowInSeconds
-	return timeInSeconds > 0 && diff < TEN_MINUTES_IN_SECONDS
+	return timeInSeconds > 0 && diff < TEN_MINUTES_IN_SECONDS && diff > 0
 }
 
-func createNotificationBody(launchName string) string {
-	return launchName + " is expected to launch in next 10 minutes"
+func createNotificationBody(launchName string, windowStart string) string {
+	return launchName + " went to space (window start: " + windowStart + ")"
 }
 
-func createNotification(id string, launchName string, topic string) *messaging.Message {
-	body := createNotificationBody(launchName)
+func createNotification(id string, launchName string, windowStart string, topic string) *messaging.Message {
+	body := createNotificationBody(launchName, windowStart)
 
 	message := &messaging.Message{
 		Data: map[string]string{
@@ -122,23 +129,26 @@ func createNotification(id string, launchName string, topic string) *messaging.M
 	return message
 }
 
-func sendNotification(ctx context.Context, client *messaging.Client, notification *messaging.Message) {
+func sendNotification(ctx context.Context, client *messaging.Client, notification *messaging.Message, launchId string) {
 
 	response, err := client.Send(ctx, notification)
 	if err != nil {
 		fmt.Println("Failed to send message")
 		return
 	}
+	fmt.Println("Updating last notification id, was:", lastNotificationLaunchId)
+	lastNotificationLaunchId = launchId
+	fmt.Println("Last notification id updated, is:", lastNotificationLaunchId)
 	fmt.Println("Successfully sent notification:", response)
 }
 
 func runInfinite(ctx context.Context, client *messaging.Client, topic string) {
 
 	for {
-		shouldSendNotification, launchId, launchName := getInfoAboutUpcomingLaunch()
-		if shouldSendNotification && launchId != "" && launchName != "" {
-			notification := createNotification(launchId, launchName, topic)
-			sendNotification(ctx, client, notification)
+		shouldSendNotification, launchId, launchName, windowStart := getInfoAboutUpcomingLaunch()
+		if shouldSendNotification && launchId != "" && launchId != lastNotificationLaunchId && launchName != "" {
+			notification := createNotification(launchId, launchName, windowStart, topic)
+			sendNotification(ctx, client, notification, launchId)
 		}
 
 		time.Sleep(10 * time.Minute)
@@ -149,12 +159,14 @@ func prepareTopic() string {
 	topic := ""
 
 	switch {
-	case len(os.Args) == 1 || os.Args[1] == DEBUG_FLAG: // if no params passed we want to use debug topic for safety
+	case len(os.Args) == 1: // if no params were passed
+		panic("Specify version either: DEBUG or RELEASE")
+	case os.Args[1] == DEBUG_FLAG:
 		topic = getDebugTopicValue()
 	case os.Args[1] == RELEASE_FLAG:
 		topic = getReleaseTopicValue()
 	default:
-		topic = getDebugTopicValue()
+		panic("Specify version either: DEBUG or RELEASE")
 	}
 
 	return topic
